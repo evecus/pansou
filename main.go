@@ -102,9 +102,21 @@ import (
 
 var globalCacheWriteManager *cache.DelayedBatchWriteManager
 
+// print 封装，始终输出到 stderr（stdout 会被重定向到 /dev/null）
+func print(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, format, a...)
+}
+
 func main() {
-	// 关闭所有多余日志输出
+	// 屏蔽 log 包输出
 	log.SetOutput(io.Discard)
+
+	// 将 stdout 重定向到 /dev/null
+	// 插件内部所有 fmt.Print/Println/Printf 都走 stdout，一并屏蔽
+	// 我们自己的输出改用 stderr
+	if devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+		os.Stdout = devNull
+	}
 
 	initApp()
 	startServer()
@@ -153,19 +165,18 @@ func startServer() {
 
 	searchService := service.NewSearchService(pluginManager)
 
-	// 传入嵌入的前端文件系统
 	router := api.SetupRouter(searchService, frontendFS)
 
 	port := config.AppConfig.Port
 
-	// 只打印关键启动信息
+	// 启动信息输出到 stderr
 	channelCount := len(config.AppConfig.DefaultChannels)
-	fmt.Printf("========================================\n")
-	fmt.Printf("PanSou 已启动\n")
-	fmt.Printf("网页地址: http://localhost:%s\n", port)
-	fmt.Printf("API地址:  http://localhost:%s/api/search\n", port)
-	fmt.Printf("========================================\n")
-	fmt.Printf("并发数: %d (频道数%d + 插件数%d + 10)\n",
+	print("========================================\n")
+	print("PanSou 已启动\n")
+	print("网页地址: http://localhost:%s\n", port)
+	print("API地址:  http://localhost:%s/api/search\n", port)
+	print("========================================\n")
+	print("并发数: %d (频道数%d + 插件数%d + 10)\n",
 		config.AppConfig.DefaultConcurrency, channelCount, pluginCount)
 
 	srv := &http.Server{
@@ -200,7 +211,7 @@ func startServer() {
 	}()
 
 	<-quit
-	fmt.Println("正在关闭服务器...")
+	print("正在关闭服务器...\n")
 
 	if globalCacheWriteManager != nil {
 		globalCacheWriteManager.Shutdown(10 * time.Second)
@@ -214,5 +225,5 @@ func startServer() {
 	defer cancel()
 	srv.Shutdown(ctx)
 
-	fmt.Println("服务器已安全关闭")
+	print("服务器已安全关闭\n")
 }
