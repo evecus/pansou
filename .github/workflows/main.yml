@@ -1,4 +1,4 @@
-name: Build Single Binary
+name: Build and Publish
 
 on:
   workflow_dispatch:
@@ -29,7 +29,6 @@ jobs:
       - name: 构建前端
         working-directory: frontend
         run: npm run build
-        # 构建产物输出到 frontend/dist，embed.go 直接引用此路径
 
       # ── 3. 设置 Go ──────────────────────────────────────────────
       - name: 设置 Go
@@ -41,20 +40,20 @@ jobs:
       - name: 下载 Go 依赖
         run: go mod download
 
-      # ── 4. 编译（amd64 + arm64）────────────────────────────────
+      # ── 4. 编译二进制（amd64 + arm64）──────────────────────────
       - name: 编译 linux/amd64
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
           go build -ldflags="-s -w" -o pansou-linux-amd64 .
-          echo "✓ amd64 编译完成 $(du -sh pansou-linux-amd64 | cut -f1)"
+          echo "✓ amd64 $(du -sh pansou-linux-amd64 | cut -f1)"
 
       - name: 编译 linux/arm64
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
           go build -ldflags="-s -w" -o pansou-linux-arm64 .
-          echo "✓ arm64 编译完成 $(du -sh pansou-linux-arm64 | cut -f1)"
+          echo "✓ arm64 $(du -sh pansou-linux-arm64 | cut -f1)"
 
-      # ── 5. 发布 Release ─────────────────────────────────────────
+      # ── 5. 发布二进制到 Release ─────────────────────────────────
       - name: 获取构建时间
         id: time
         run: echo "tag=build-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
@@ -68,26 +67,14 @@ jobs:
             ## 下载说明
             | 文件 | 适用平台 |
             |------|---------|
-            | `pansou-linux-amd64` | 普通 x86_64 服务器（绝大多数云服务器） |
-            | `pansou-linux-arm64` | ARM 架构服务器（树莓派、ARM云服务器等） |
+            | `pansou-linux-amd64` | 普通 x86_64 服务器 |
+            | `pansou-linux-arm64` | ARM 架构服务器（树莓派等） |
 
-            ## 快速运行
+            ## 运行
             ```bash
-            # 下载对应架构文件后
             chmod +x pansou-linux-amd64
             ./pansou-linux-amd64
-
-            # 打开浏览器访问
-            # http://服务器IP:8888
-            ```
-
-            ## 可选环境变量
-            ```bash
-            PORT=8888 \
-            CACHE_PATH=./cache \
-            ENABLED_PLUGINS=labi,zhizhen,shandian,duoduo \
-            CHANNELS=tgsearchers4,Aliyun_4K_Movies \
-            ./pansou-linux-amd64
+            # 访问 http://服务器IP:5566
             ```
           files: |
             pansou-linux-amd64
@@ -95,3 +82,29 @@ jobs:
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 6. 构建并推送 Docker 多架构镜像到 DockerHub ────────────
+      - name: 设置 QEMU（支持多架构）
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.d-u }}
+          password: ${{ secrets.d-t }}
+
+      - name: 构建并推送 Docker 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.d-u }}/pansou:latest
+            ${{ secrets.d-t }}/pansou:${{ steps.time.outputs.tag }}
