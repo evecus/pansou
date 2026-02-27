@@ -18,6 +18,7 @@
 docker run -d \
   --name pansou \
   -p 5566:5566 \
+  -v /data/pansou/cache:/app/cache \
   --restart unless-stopped \
   evecus/pansou:latest
 ```
@@ -34,6 +35,8 @@ services:
     restart: unless-stopped
     ports:
       - "5566:5566"
+    volumes:
+      - /data/pansou/cache:/app/cache
 ```
 
 ```bash
@@ -51,7 +54,7 @@ docker compose up -d
 
 ```bash
 chmod +x pansou-linux-arm64
-./pansou-linux-arm64
+PORT=5566 ./pansou-linux-arm64
 ```
 
 ## 环境变量
@@ -60,7 +63,7 @@ chmod +x pansou-linux-arm64
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `PORT` | `8888` | 服务监听端口 |
+| `PORT` | `5566` | 服务监听端口 |
 | `CACHE_PATH` | `./cache` | 缓存文件路径 |
 | `CACHE_TTL` | `60` | 缓存有效期（分钟） |
 | `CACHE_MAX_SIZE` | `100` | 最大缓存大小（MB） |
