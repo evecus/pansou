@@ -3,14 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
-	"sort"
-	"strings"
 	"syscall"
 	"time"
 
@@ -105,6 +103,9 @@ import (
 var globalCacheWriteManager *cache.DelayedBatchWriteManager
 
 func main() {
+	// 关闭所有多余日志输出
+	log.SetOutput(io.Discard)
+
 	initApp()
 	startServer()
 }
@@ -116,10 +117,12 @@ func initApp() {
 	var err error
 	globalCacheWriteManager, err = cache.NewDelayedBatchWriteManager()
 	if err != nil {
-		log.Fatalf("缓存写入管理器创建失败: %v", err)
+		fmt.Fprintf(os.Stderr, "缓存写入管理器创建失败: %v\n", err)
+		os.Exit(1)
 	}
 	if err := globalCacheWriteManager.Initialize(); err != nil {
-		log.Fatalf("缓存写入管理器初始化失败: %v", err)
+		fmt.Fprintf(os.Stderr, "缓存写入管理器初始化失败: %v\n", err)
+		os.Exit(1)
 	}
 	service.SetGlobalCacheWriteManager(globalCacheWriteManager)
 
@@ -155,7 +158,15 @@ func startServer() {
 
 	port := config.AppConfig.Port
 
-	printServiceInfo(port, pluginManager)
+	// 只打印关键启动信息
+	channelCount := len(config.AppConfig.DefaultChannels)
+	fmt.Printf("========================================\n")
+	fmt.Printf("PanSou 已启动\n")
+	fmt.Printf("网页地址: http://localhost:%s\n", port)
+	fmt.Printf("API地址:  http://localhost:%s/api/search\n", port)
+	fmt.Printf("========================================\n")
+	fmt.Printf("并发数: %d (频道数%d + 插件数%d + 10)\n",
+		config.AppConfig.DefaultConcurrency, channelCount, pluginCount)
 
 	srv := &http.Server{
 		Addr:         ":" + port,
@@ -172,15 +183,18 @@ func startServer() {
 		if config.AppConfig.HTTPMaxConns > 0 {
 			listener, err := net.Listen("tcp", srv.Addr)
 			if err != nil {
-				log.Fatalf("创建监听器失败: %v", err)
+				fmt.Fprintf(os.Stderr, "创建监听器失败: %v\n", err)
+				os.Exit(1)
 			}
 			limitListener := netutil.LimitListener(listener, config.AppConfig.HTTPMaxConns)
 			if err := srv.Serve(limitListener); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("启动服务器失败: %v", err)
+				fmt.Fprintf(os.Stderr, "启动服务器失败: %v\n", err)
+				os.Exit(1)
 			}
 		} else {
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("启动服务器失败: %v", err)
+				fmt.Fprintf(os.Stderr, "启动服务器失败: %v\n", err)
+				os.Exit(1)
 			}
 		}
 	}()
@@ -189,75 +203,16 @@ func startServer() {
 	fmt.Println("正在关闭服务器...")
 
 	if globalCacheWriteManager != nil {
-		if err := globalCacheWriteManager.Shutdown(10 * time.Second); err != nil {
-			log.Printf("缓存数据保存失败: %v", err)
-		}
+		globalCacheWriteManager.Shutdown(10 * time.Second)
 	}
 
 	if mainCache := service.GetEnhancedTwoLevelCache(); mainCache != nil {
-		if err := mainCache.FlushMemoryToDisk(); err != nil {
-			log.Printf("内存缓存同步失败: %v", err)
-		}
+		mainCache.FlushMemoryToDisk()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("服务器关闭异常: %v", err)
-	}
+	srv.Shutdown(ctx)
 
 	fmt.Println("服务器已安全关闭")
-}
-
-func printServiceInfo(port string, pluginManager *plugin.PluginManager) {
-	fmt.Printf("========================================\n")
-	fmt.Printf("PanSou 已启动\n")
-	fmt.Printf("网页地址: http://localhost:%s\n", port)
-	fmt.Printf("API地址:  http://localhost:%s/api/search\n", port)
-	fmt.Printf("========================================\n")
-
-	if config.AppConfig.ProxyURL != "" {
-		proxyType := "代理"
-		if strings.HasPrefix(config.AppConfig.ProxyURL, "socks5://") {
-			proxyType = "SOCKS5代理"
-		} else if strings.HasPrefix(config.AppConfig.ProxyURL, "http://") {
-			proxyType = "HTTP代理"
-		}
-		fmt.Printf("使用%s: %s\n", proxyType, config.AppConfig.ProxyURL)
-	}
-
-	channelCount := len(config.AppConfig.DefaultChannels)
-	pluginCount := 0
-	if config.AppConfig.AsyncPluginEnabled && pluginManager != nil {
-		pluginCount = len(pluginManager.GetPlugins())
-	}
-	fmt.Printf("并发数: %d (频道数%d + 插件数%d + 10)\n",
-		config.AppConfig.DefaultConcurrency, channelCount, pluginCount)
-
-	if config.AppConfig.CacheEnabled {
-		fmt.Printf("缓存: 已启用 路径=%s TTL=%d分钟\n",
-			config.AppConfig.CachePath, config.AppConfig.CacheTTLMinutes)
-	}
-
-	cpuCount := runtime.NumCPU()
-	fmt.Printf("HTTP: 读取超时=%v 写入超时=%v 最大连接=%d(CPU×200, CPU=%d核)\n",
-		config.AppConfig.HTTPReadTimeout,
-		config.AppConfig.HTTPWriteTimeout,
-		config.AppConfig.HTTPMaxConns, cpuCount)
-
-	if config.AppConfig.AsyncPluginEnabled {
-		plugins := pluginManager.GetPlugins()
-		fmt.Printf("已加载插件 %d 个\n", len(plugins))
-		sort.Slice(plugins, func(i, j int) bool {
-			if plugins[i].Priority() == plugins[j].Priority() {
-				return plugins[i].Name() < plugins[j].Name()
-			}
-			return plugins[i].Priority() < plugins[j].Priority()
-		})
-		for _, p := range plugins {
-			fmt.Printf("  ✓ %s (优先级:%d)\n", p.Name(), p.Priority())
-		}
-	}
-	fmt.Printf("========================================\n")
 }
