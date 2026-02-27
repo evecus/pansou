@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"io/fs"
 
 	"github.com/gin-gonic/gin"
@@ -14,12 +15,15 @@ import (
 func SetupRouter(searchService *service.SearchService, frontendFS fs.FS) *gin.Engine {
 	SetSearchService(searchService)
 
+	// 关闭 gin 所有内置日志
 	gin.SetMode(gin.ReleaseMode)
+	gin.DefaultWriter = io.Discard
+	gin.DefaultErrorWriter = io.Discard
 
-	r := gin.Default()
+	r := gin.New() // 用 gin.New() 而不是 gin.Default()，不挂载默认Logger和Recovery
 
+	r.Use(gin.Recovery()) // 只保留崩溃恢复，不要日志
 	r.Use(CORSMiddleware())
-	r.Use(LoggerMiddleware())
 	r.Use(util.GzipMiddleware())
 	r.Use(AuthMiddleware())
 
