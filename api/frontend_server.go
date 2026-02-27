@@ -17,6 +17,17 @@ func ServeFrontend(r *gin.Engine, frontendFS fs.FS) {
 
 	fileServer := http.FileServer(http.FS(subFS))
 
+	// 读取 index.html 的通用函数
+	serveIndex := func(c *gin.Context) {
+		data, err := fs.ReadFile(subFS, "index.html")
+		if err != nil {
+			c.String(500, "前端文件加载失败")
+			return
+		}
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		c.Data(200, "text/html; charset=utf-8", data)
+	}
+
 	// 静态资源（带长缓存）
 	r.GET("/assets/*filepath", func(c *gin.Context) {
 		c.Header("Cache-Control", "public, max-age=2592000")
@@ -30,10 +41,7 @@ func ServeFrontend(r *gin.Engine, frontendFS fs.FS) {
 	})
 
 	// 根路径
-	r.GET("/", func(c *gin.Context) {
-		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
-		c.FileFromFS("index.html", http.FS(subFS))
-	})
+	r.GET("/", serveIndex)
 
 	// SPA 兜底：所有未匹配路由返回 index.html
 	r.NoRoute(func(c *gin.Context) {
@@ -47,7 +55,6 @@ func ServeFrontend(r *gin.Engine, frontendFS fs.FS) {
 			return
 		}
 		// 前端 SPA 路由回退
-		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
-		c.FileFromFS("index.html", http.FS(subFS))
+		serveIndex(c)
 	})
 }
