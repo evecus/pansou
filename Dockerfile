@@ -1,9 +1,7 @@
 FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata
-
 ENV TZ=Asia/Shanghai
-ENV PORT=5566
 ENV CACHE_PATH=/app/cache
 
 RUN mkdir -p /app/cache
