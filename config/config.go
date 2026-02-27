@@ -52,8 +52,13 @@ type Config struct {
 	AuthUsers       map[string]string // 用户名:密码映射
 	AuthTokenExpiry time.Duration     // Token有效期
 	AuthJWTSecret   string            // JWT签名密钥
-
 }
+
+// 默认频道列表
+const defaultChannels = "tgsearchers4,Aliyun_4K_Movies,bdbdndn11,yunpanx,bsbdbfjfjff,yp123pan,sbsbsnsqq,yunpanxunlei,tianyifc,BaiduCloudDisk,txtyzy,peccxinpd,gotopan,PanjClub,kkxlzy,baicaoZY,MCPH01,MCPH02,MCPH03,bdwpzhpd,ysxb48,jdjdn1111,yggpan,MCPH086,zaihuayun,Q66Share,ucwpzy,shareAliyun,alyp_1,dianyingshare,Quark_Movies,XiangxiuNBB,ydypzyfx,ucquark,xx123pan,yingshifenxiang123,zyfb123,tyypzhpd,tianyirigeng,cloudtianyi,hdhhd21,Lsp115,oneonefivewpfx,qixingzhenren,taoxgzy,Channel_Shares_115,tyysypzypd,vip115hot,wp123zy,yunpan139,yunpan189,yunpanuc,yydf_hzl,leoziyuan,pikpakpan,Q_dongman,yoyokuakeduanju,TG654TG,WFYSFX02,QukanMovie,yeqingjie_GJG666,movielover8888_film3,Baidu_netdisk,D_wusun,FLMdongtianfudi,KaiPanshare,QQZYDAPP,rjyxfx,PikPak_Share_Channel,btzhi,newproductsourcing,cctv1211,duan_ju,QuarkFree,yunpanNB,kkdj001,xxzlzn,pxyunpanxunlei,jxwpzy,kuakedongman,liangxingzhinan,xiangnikanj,guoman4K,zdqxm,kduanju,cilidianying,CBduanju,SharePanFilms,dzsgx,BooksRealm,Oscar_4Kmovies,douerpan,baidu_yppan,Q_jilupian,Netdisk_Movies,yunpanquark,ammmziyuan,ciliziyuanku,cili8888,jzmm_123pan"
+
+// 默认插件列表
+const defaultPlugins = "labi,zhizhen,shandian,duoduo,muou,wanou,hunhepan,jikepan,panwiki,pansearch,panta,qupansou,hdr4k,pan666,susu,xuexizhinan,panyq,ouge,huban,cyg,erxiao,miaoso,fox4k,pianku,clmao,wuji,cldi,xiaozhang,libvio,leijing,xb6v,xys,ddys,hdmoli,clxiong,jutoushe,sdso,xiaoji,xdyh,haisou,bixin,djgou,nyaa,xinjuc,aikanzy,qupanshe,xdpan,discourse,yunsou,ahhhhfs,nsgame,quark4k,quarksoo,sousou,ash,feikuai,kkmao,alupan,ypfxw,mikuclub,daishudj,dyyj,meitizy,jsnoteclub,mizixing,lou1,yiove,zxzj,qingying,kkv"
 
 // 全局配置实例
 var AppConfig *Config
@@ -63,7 +68,7 @@ func Init() {
 	proxyURL := getProxyURL()
 	pluginTimeoutSeconds := getPluginTimeout()
 	asyncResponseTimeoutSeconds := getAsyncResponseTimeout()
-	
+
 	AppConfig = &Config{
 		DefaultChannels:    getDefaultChannels(),
 		DefaultConcurrency: getDefaultConcurrency(),
@@ -105,18 +110,17 @@ func Init() {
 		AuthUsers:       getAuthUsers(),
 		AuthTokenExpiry: getAuthTokenExpiry(),
 		AuthJWTSecret:   getAuthJWTSecret(),
-
 	}
-	
+
 	// 应用GC配置
 	applyGCSettings()
 }
 
-// 从环境变量获取默认频道列表，如果未设置则使用默认值
+// 从环境变量获取默认频道列表，未设置则使用内置默认值
 func getDefaultChannels() []string {
 	channelsEnv := os.Getenv("CHANNELS")
 	if channelsEnv == "" {
-		return []string{"tgsearchers4"}
+		return strings.Split(defaultChannels, ",")
 	}
 	return strings.Split(channelsEnv, ",")
 }
@@ -130,12 +134,9 @@ func getDefaultConcurrency() int {
 			return concurrency
 		}
 	}
-	
-	// 环境变量未设置或无效，使用基于环境变量的简单计算
-	// 计算频道数
+
 	channelCount := len(getDefaultChannels())
-	
-	// 估计插件数（从环境变量或默认值，实际在应用启动后会根据真实插件数调整）
+
 	pluginCountEnv := os.Getenv("PLUGIN_COUNT")
 	pluginCount := 0
 	if pluginCountEnv != "" {
@@ -144,44 +145,36 @@ func getDefaultConcurrency() int {
 			pluginCount = count
 		}
 	}
-	
-	// 如果没有指定插件数，默认使用7个（当前已知的插件数）
+
 	if pluginCount == 0 {
 		pluginCount = 7
 	}
-	
-	// 计算并发数 = 频道数 + 插件数 + 10
+
 	concurrency := channelCount + pluginCount + 10
 	if concurrency < 1 {
-		concurrency = 1 // 确保至少为1
+		concurrency = 1
 	}
-	
+
 	return concurrency
 }
 
 // 更新默认并发数（根据实际插件数或0调用）
-// pluginCount: 如果插件被禁用则为0，否则为实际插件数
 func UpdateDefaultConcurrency(pluginCount int) {
 	if AppConfig == nil {
 		return
 	}
-	
-	// 只有当未通过环境变量指定并发数时才进行调整
+
 	concurrencyEnv := os.Getenv("CONCURRENCY")
 	if concurrencyEnv != "" {
 		return
 	}
-	
-	// 计算频道数
+
 	channelCount := len(AppConfig.DefaultChannels)
-	
-	// 计算并发数 = 频道数 + 插件数（插件禁用时为0）+ 10
 	concurrency := channelCount + pluginCount + 10
 	if concurrency < 1 {
-		concurrency = 1 // 确保至少为1
+		concurrency = 1
 	}
-	
-	// 更新配置
+
 	AppConfig.DefaultConcurrency = concurrency
 }
 
@@ -189,7 +182,7 @@ func UpdateDefaultConcurrency(pluginCount int) {
 func getPort() string {
 	port := os.Getenv("PORT")
 	if port == "" {
-		return "5566"
+		return "8888"
 	}
 	return port
 }
@@ -225,7 +218,6 @@ func getCacheEnabled() bool {
 func getCachePath() string {
 	path := os.Getenv("CACHE_PATH")
 	if path == "" {
-		// 默认在当前目录下创建cache文件夹
 		defaultPath, err := filepath.Abs("./cache")
 		if err != nil {
 			return "./cache"
@@ -239,7 +231,7 @@ func getCachePath() string {
 func getCacheMaxSize() int {
 	sizeEnv := os.Getenv("CACHE_MAX_SIZE")
 	if sizeEnv == "" {
-		return 100 // 默认100MB
+		return 100
 	}
 	size, err := strconv.Atoi(sizeEnv)
 	if err != nil || size <= 0 {
@@ -252,7 +244,7 @@ func getCacheMaxSize() int {
 func getCacheTTL() int {
 	ttlEnv := os.Getenv("CACHE_TTL")
 	if ttlEnv == "" {
-		return 60 // 默认60分钟
+		return 60
 	}
 	ttl, err := strconv.Atoi(ttlEnv)
 	if err != nil || ttl <= 0 {
@@ -265,7 +257,7 @@ func getCacheTTL() int {
 func getEnableCompression() bool {
 	enabled := os.Getenv("ENABLE_COMPRESSION")
 	if enabled == "" {
-		return false // 默认禁用，因为通常由Nginx等处理
+		return false
 	}
 	return enabled == "true" || enabled == "1"
 }
@@ -274,7 +266,7 @@ func getEnableCompression() bool {
 func getMinSizeToCompress() int {
 	sizeEnv := os.Getenv("MIN_SIZE_TO_COMPRESS")
 	if sizeEnv == "" {
-		return 1024 // 默认1KB
+		return 1024
 	}
 	size, err := strconv.Atoi(sizeEnv)
 	if err != nil || size <= 0 {
@@ -287,11 +279,11 @@ func getMinSizeToCompress() int {
 func getGCPercent() int {
 	percentEnv := os.Getenv("GC_PERCENT")
 	if percentEnv == "" {
-		return 50 // 默认50% - 优化内存管理，更频繁的GC避免内存暴涨
+		return 50
 	}
 	percent, err := strconv.Atoi(percentEnv)
 	if err != nil || percent <= 0 {
-		return 50 // 错误时也使用优化后的默认值
+		return 50
 	}
 	return percent
 }
@@ -300,7 +292,7 @@ func getGCPercent() int {
 func getOptimizeMemory() bool {
 	enabled := os.Getenv("OPTIMIZE_MEMORY")
 	if enabled == "" {
-		return true // 默认启用
+		return true
 	}
 	return enabled != "false" && enabled != "0"
 }
@@ -309,7 +301,7 @@ func getOptimizeMemory() bool {
 func getPluginTimeout() int {
 	timeoutEnv := os.Getenv("PLUGIN_TIMEOUT")
 	if timeoutEnv == "" {
-		return 30 // 默认30秒
+		return 30
 	}
 	timeout, err := strconv.Atoi(timeoutEnv)
 	if err != nil || timeout <= 0 {
@@ -322,28 +314,24 @@ func getPluginTimeout() int {
 func getAsyncPluginEnabled() bool {
 	enabled := os.Getenv("ASYNC_PLUGIN_ENABLED")
 	if enabled == "" {
-		return true // 默认启用
+		return true
 	}
 	return enabled != "false" && enabled != "0"
 }
 
-// 从环境变量获取启用的插件列表
-// 返回nil表示未设置环境变量（不启用任何插件）
-// 返回[]string{}表示设置为空（不启用任何插件）
-// 返回具体列表表示启用指定插件
+// 从环境变量获取启用的插件列表，未设置则使用内置默认值
 func getEnabledPlugins() []string {
 	plugins, exists := os.LookupEnv("ENABLED_PLUGINS")
 	if !exists {
-		// 未设置环境变量时返回nil，表示不启用任何插件
-		return nil
+		// 未设置环境变量时使用内置默认插件列表
+		return strings.Split(defaultPlugins, ",")
 	}
-	
+
 	if plugins == "" {
-		// 设置为空字符串，也表示不启用任何插件
+		// 显式设置为空，表示不启用任何插件
 		return []string{}
 	}
-	
-	// 按逗号分割插件名
+
 	result := make([]string, 0)
 	for _, plugin := range strings.Split(plugins, ",") {
 		plugin = strings.TrimSpace(plugin)
@@ -351,7 +339,7 @@ func getEnabledPlugins() []string {
 			result = append(result, plugin)
 		}
 	}
-	
+
 	return result
 }
 
@@ -359,7 +347,7 @@ func getEnabledPlugins() []string {
 func getAsyncResponseTimeout() int {
 	timeoutEnv := os.Getenv("ASYNC_RESPONSE_TIMEOUT")
 	if timeoutEnv == "" {
-		return 4 // 默认4秒
+		return 4
 	}
 	timeout, err := strconv.Atoi(timeoutEnv)
 	if err != nil || timeout <= 0 {
@@ -377,17 +365,13 @@ func getAsyncMaxBackgroundWorkers() int {
 			return size
 		}
 	}
-	
-	// 自动计算：根据CPU核心数计算
-	// 每个CPU核心分配5个工作者，最小20个
+
 	cpuCount := runtime.NumCPU()
 	workers := cpuCount * 5
-	
-	// 确保至少有20个工作者
 	if workers < 20 {
 		workers = 20
 	}
-	
+
 	return workers
 }
 
@@ -400,16 +384,13 @@ func getAsyncMaxBackgroundTasks() int {
 			return size
 		}
 	}
-	
-	// 自动计算：工作者数量的5倍，最小100个
+
 	workers := getAsyncMaxBackgroundWorkers()
 	tasks := workers * 5
-	
-	// 确保至少有100个任务
 	if tasks < 100 {
 		tasks = 100
 	}
-	
+
 	return tasks
 }
 
@@ -417,7 +398,7 @@ func getAsyncMaxBackgroundTasks() int {
 func getAsyncCacheTTLHours() int {
 	ttlEnv := os.Getenv("ASYNC_CACHE_TTL_HOURS")
 	if ttlEnv == "" {
-		return 1 // 默认1小时
+		return 1
 	}
 	ttl, err := strconv.Atoi(ttlEnv)
 	if err != nil || ttl <= 0 {
@@ -435,20 +416,16 @@ func getHTTPReadTimeout() time.Duration {
 			return time.Duration(timeout) * time.Second
 		}
 	}
-	
-	// 自动计算：默认30秒，异步模式下根据异步响应超时调整
+
 	timeout := 30 * time.Second
-	
-	// 如果启用了异步插件，确保读取超时足够长
 	if getAsyncPluginEnabled() {
-		// 读取超时应该至少是异步响应超时的3倍，确保有足够时间完成异步操作
 		asyncTimeoutSecs := getAsyncResponseTimeout()
-		asyncTimeoutExtended := time.Duration(asyncTimeoutSecs * 3) * time.Second
+		asyncTimeoutExtended := time.Duration(asyncTimeoutSecs*3) * time.Second
 		if asyncTimeoutExtended > timeout {
 			timeout = asyncTimeoutExtended
 		}
 	}
-	
+
 	return timeout
 }
 
@@ -461,20 +438,14 @@ func getHTTPWriteTimeout() time.Duration {
 			return time.Duration(timeout) * time.Second
 		}
 	}
-	
-	// 自动计算：默认60秒，但根据插件超时和异步处理时间调整
+
 	timeout := 60 * time.Second
-	
-	// 如果启用了异步插件，确保写入超时足够长
 	pluginTimeoutSecs := getPluginTimeout()
-	
-	// 计算1.5倍的插件超时时间（使用整数运算：乘以3再除以2）
-	pluginTimeoutExtended := time.Duration(pluginTimeoutSecs * 3 / 2) * time.Second
-	
+	pluginTimeoutExtended := time.Duration(pluginTimeoutSecs*3/2) * time.Second
 	if pluginTimeoutExtended > timeout {
 		timeout = pluginTimeoutExtended
 	}
-	
+
 	return timeout
 }
 
@@ -487,8 +458,6 @@ func getHTTPIdleTimeout() time.Duration {
 			return time.Duration(timeout) * time.Second
 		}
 	}
-	
-	// 自动计算：默认120秒，考虑到保持连接的效益
 	return 120 * time.Second
 }
 
@@ -501,17 +470,13 @@ func getHTTPMaxConns() int {
 			return maxConns
 		}
 	}
-	
-	// 自动计算：根据CPU核心数计算
-	// 每个CPU核心分配200个连接，最小1000个
+
 	cpuCount := runtime.NumCPU()
 	maxConns := cpuCount * 200
-	
-	// 确保至少有1000个连接
 	if maxConns < 1000 {
 		maxConns = 1000
 	}
-	
+
 	return maxConns
 }
 
@@ -519,11 +484,11 @@ func getHTTPMaxConns() int {
 func getAsyncLogEnabled() bool {
 	logEnv := os.Getenv("ASYNC_LOG_ENABLED")
 	if logEnv == "" {
-		return true // 默认启用日志
+		return true
 	}
 	enabled, err := strconv.ParseBool(logEnv)
 	if err != nil {
-		return true // 解析失败时默认启用
+		return true
 	}
 	return enabled
 }
@@ -540,7 +505,7 @@ func getAuthUsers() map[string]string {
 	if usersEnv == "" {
 		return nil
 	}
-	
+
 	users := make(map[string]string)
 	pairs := strings.Split(usersEnv, ",")
 	for _, pair := range pairs {
@@ -560,7 +525,7 @@ func getAuthUsers() map[string]string {
 func getAuthTokenExpiry() time.Duration {
 	expiryEnv := os.Getenv("AUTH_TOKEN_EXPIRY")
 	if expiryEnv == "" {
-		return 24 * time.Hour // 默认24小时
+		return 24 * time.Hour
 	}
 	expiry, err := strconv.Atoi(expiryEnv)
 	if err != nil || expiry <= 0 {
@@ -573,13 +538,6 @@ func getAuthTokenExpiry() time.Duration {
 func getAuthJWTSecret() string {
 	secret := os.Getenv("AUTH_JWT_SECRET")
 	if secret == "" {
-		// 生成随机密钥（32字节）
-		import_crypto := "crypto/rand"
-		import_encoding := "encoding/base64"
-		_ = import_crypto
-		_ = import_encoding
-		// 注意：实际使用时应该使用crypto/rand生成随机密钥
-		// 这里为了简化，使用时间戳作为临时密钥
 		secret = "pansou-default-secret-" + strconv.FormatInt(time.Now().Unix(), 10)
 	}
 	return secret
@@ -587,14 +545,8 @@ func getAuthJWTSecret() string {
 
 // 应用GC设置
 func applyGCSettings() {
-	// 设置GC百分比
 	debug.SetGCPercent(AppConfig.GCPercent)
-	
-	// 如果启用内存优化
 	if AppConfig.OptimizeMemory {
-		// 释放操作系统内存
 		debug.FreeOSMemory()
 	}
 }
-
- 
