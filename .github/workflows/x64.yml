@@ -26,7 +26,7 @@ jobs:
           key: linux-x86_64
 
       - name: Install musl tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools pkg-config libssl-dev
 
       - name: Build (x86_64-unknown-linux-musl, release)
         run: cargo build --release --target x86_64-unknown-linux-musl
