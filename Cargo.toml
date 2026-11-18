@@ -16,7 +16,20 @@ tower-http = { version = "0.5", features = ["cors", "compression-gzip", "compres
 hyper = { version = "1", features = ["full"] }
 
 # HTTP 客户端
-reqwest = { version = "0.12", features = ["json", "gzip", "brotli", "deflate", "stream", "socks", "cookies"] }
+reqwest = { 
+    version = "0.12", 
+    default-features = false, 
+    features = [
+        "json", 
+        "gzip", 
+        "brotli", 
+        "deflate", 
+        "stream", 
+        "socks", 
+        "cookies",
+        "rustls-tls"          # 关键 native-tls
+    ] 
+}
 
 # 序列化
 serde = { version = "1", features = ["derive"] }
