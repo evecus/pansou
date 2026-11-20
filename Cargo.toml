@@ -1,0 +1,92 @@
+[package]
+name = "pansou"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Web 框架
+axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "compression-gzip", "compression-br", "fs", "trace"] }
+hyper = { version = "1", features = ["full"] }
+
+# HTTP 客户端
+reqwest = { 
+    version = "0.12", 
+    default-features = false, 
+    features = [
+        "json", 
+        "gzip", 
+        "brotli", 
+        "deflate", 
+        "stream", 
+        "socks", 
+        "cookies",
+        "rustls-tls"          # 关键 native-tls
+    ] 
+}
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTML 解析
+scraper = "0.19"
+
+# 正则
+regex = "1"
+once_cell = "1"
+
+# 哈希 / 加密
+md-5 = "0.10"
+sha2 = "0.10"
+crc32fast = "1"
+aes = "0.8"
+cbc = { version = "0.1", features = ["block-padding"] }
+base64 = "0.22"
+hex = "0.4"
+
+# JWT 认证
+jsonwebtoken = "9"
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# 缓存
+moka = { version = "0.12", features = ["sync"] }
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# URL 处理
+url = "2"
+percent-encoding = "2"
+
+# 字符编码（GBK 站点）
+encoding_rs = "0.8"
+
+# 静态资源内嵌
+rust-embed = { version = "8", features = ["debug-embed", "compression"] }
+
+# 随机数
+rand = "0.8"
+
+# 并发/工具
+futures = "0.3"
+dashmap = "6"
+anyhow = "1"
+
+# 信号处理
+signal-hook = "0.3"
