@@ -3,14 +3,14 @@
 use crate::config;
 use crate::model::{MergedLink, MergedLinks, PluginSearchResult, SearchRequest, SearchResponse, SearchResult};
 use crate::plugin::PluginManager;
-use crate::service::{filter, tg};
-use crate::util::http::build_client;
+use crate::service::{filter, tg, tg_reachability};
+use crate::util::http::{build_client, GLOBAL_CLIENT};
 use crate::util::{cache, HttpClient};
 use futures::future::join_all;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// TG 频道搜索整体硬超时（秒）：短于前端 10s 超时，保证混合搜索能返回结果
+/// TG 频道搜索整体硬超时（秒）：短于前端超时，保证混合搜索能及时返回
 const TG_SEARCH_TIMEOUT_SECS: u64 = 8;
 /// 单个 TG 频道客户端超时（秒）：测速接口实测可达即可用，避免慢频道拖垮整批
 const TG_CHANNEL_TIMEOUT_SECS: u64 = 8;
@@ -18,7 +18,8 @@ const TG_CHANNEL_TIMEOUT_SECS: u64 = 8;
 pub struct SearchService {
     pub plugin_manager: Arc<PluginManager>,
     client: HttpClient,
-    /// 专用于 TG 频道抓取：0 重试 + 8s 超时，与测速接口一致
+    /// 专用于 TG 频道抓取：带代理（对齐 Go 原版 util.GetHTTPClient）、0 重试 + 8s 超时
+    /// 旧版用 build_client(None) 无代理，在需要代理的环境 t.me 必然全部超时。
     tg_client: HttpClient,
 }
 
@@ -27,7 +28,8 @@ impl SearchService {
         Self {
             plugin_manager,
             client: HttpClient::new(build_client(None, Duration::from_secs(30)), 1),
-            tg_client: HttpClient::new(build_client(None, Duration::from_secs(TG_CHANNEL_TIMEOUT_SECS)), 0),
+            // 用带全局代理的客户端克隆，超时由外层 tokio::time::timeout 控制，0 重试。
+            tg_client: HttpClient::new(GLOBAL_CLIENT.clone(), 0),
         }
     }
 
@@ -108,6 +110,16 @@ impl SearchService {
                 if let Ok(r) = serde_json::from_slice::<Vec<SearchResult>>(&raw) { return r; }
             }
         }
+
+        // TG 可达性门（对齐 Go 原版）：t.me 被墙时不是连接拒绝而是静默丢包，
+        // 108 个频道会全部挂满超时、换来 0 条结果，还拖垮 all 模式。
+        // 后台探测判定不可达时直接跳过 TG：不写缓存、不计频道失败，让插件结果正常返回。
+        if !tg_reachability::reachable() {
+            tracing::warn!("[searchTG] {}：t.me 当前不可达，跳过 TG 阶段（{:?}）",
+                keyword, tg_reachability::snapshot().get("reason"));
+            return vec![];
+        }
+
         let client = &self.tg_client;
         let futs: Vec<_> = channels.iter().map(|ch| {
             let url = tg::build_search_url(ch, keyword, "");

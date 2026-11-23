@@ -172,6 +172,7 @@ async fn health(State(st): State<AppState>) -> AxumResponse {
         "plugins_enabled": cfg.async_plugin_enabled,
         "channels": cfg.default_channels,
         "channels_count": cfg.default_channels.len(),
+        "tg_reachability": crate::service::tg_reachability::snapshot(),
     });
     if cfg.async_plugin_enabled {
         let names = st.search.plugin_manager.names();
