@@ -4,21 +4,30 @@ use crate::config;
 use crate::model::{MergedLink, MergedLinks, PluginSearchResult, SearchRequest, SearchResponse, SearchResult};
 use crate::plugin::PluginManager;
 use crate::service::{filter, tg};
+use crate::util::http::build_client;
 use crate::util::{cache, HttpClient};
 use futures::future::join_all;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// TG 频道搜索整体硬超时（秒）：短于前端 10s 超时，保证混合搜索能返回结果
+const TG_SEARCH_TIMEOUT_SECS: u64 = 8;
+/// 单个 TG 频道客户端超时（秒）：测速接口实测可达即可用，避免慢频道拖垮整批
+const TG_CHANNEL_TIMEOUT_SECS: u64 = 8;
+
 pub struct SearchService {
     pub plugin_manager: Arc<PluginManager>,
     client: HttpClient,
+    /// 专用于 TG 频道抓取：0 重试 + 8s 超时，与测速接口一致
+    tg_client: HttpClient,
 }
 
 impl SearchService {
     pub fn new(plugin_manager: Arc<PluginManager>) -> Self {
         Self {
             plugin_manager,
-            client: HttpClient::new(crate::util::http::build_client(None, Duration::from_secs(30)), 1),
+            client: HttpClient::new(build_client(None, Duration::from_secs(30)), 1),
+            tg_client: HttpClient::new(build_client(None, Duration::from_secs(TG_CHANNEL_TIMEOUT_SECS)), 0),
         }
     }
 
@@ -30,9 +39,20 @@ impl SearchService {
         let channels = if req.channels.is_empty() { config::get().default_channels.clone() } else { req.channels.clone() };
 
         // TG 与插件并发搜索
+        // t.me 在国内常不可达，单次抓取 30s×重试会拖垮整个响应；
+        // 给 TG 部分套硬超时，超时即放弃 TG 结果，保证插件/频道结果能及时返回。
         let tg_fut = async {
             if source_type == "all" || source_type == "tg" {
-                self.search_tg(&req.kw, &channels, req.refresh).await
+                match tokio::time::timeout(
+                    Duration::from_secs(TG_SEARCH_TIMEOUT_SECS),
+                    self.search_tg(&req.kw, &channels, req.refresh),
+                ).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        tracing::warn!("TG 频道搜索超时({}s)，跳过 TG 结果", TG_SEARCH_TIMEOUT_SECS);
+                        vec![]
+                    }
+                }
             } else { vec![] }
         };
         let plugin_fut = async {
@@ -88,14 +108,19 @@ impl SearchService {
                 if let Ok(r) = serde_json::from_slice::<Vec<SearchResult>>(&raw) { return r; }
             }
         }
-        let client = &self.client;
+        let client = &self.tg_client;
         let futs: Vec<_> = channels.iter().map(|ch| {
             let url = tg::build_search_url(ch, keyword, "");
             let ch = ch.clone();
             async move {
-                match client.get_text(&url, None).await {
-                    Ok(html) => tg::parse_search_results(&html, &ch),
-                    Err(e) => { tracing::debug!("TG {} 抓取失败: {}", ch, e); vec![] }
+                // 每个频道独立超时：慢频道只影响自己，不拖垮整批 join_all
+                match tokio::time::timeout(
+                    Duration::from_secs(TG_CHANNEL_TIMEOUT_SECS),
+                    client.get_text(&url, None),
+                ).await {
+                    Ok(Ok(html)) => tg::parse_search_results(&html, &ch),
+                    Ok(Err(e)) => { tracing::debug!("TG {} 抓取失败: {}", ch, e); vec![] }
+                    Err(_) => { tracing::warn!("TG {} 抓取超时({}s)，跳过", ch, TG_CHANNEL_TIMEOUT_SECS); vec![] }
                 }
             }
         }).collect();
