@@ -126,7 +126,8 @@ impl SearchService {
         }).collect();
         let results: Vec<Vec<SearchResult>> = join_all(futs).await;
         let merged: Vec<SearchResult> = results.into_iter().flatten().collect();
-        if config::get().cache_enabled {
+        // 空结果不写缓存，避免慢频道/失败时把空结果缓存下来污染后续请求
+        if config::get().cache_enabled && !merged.is_empty() {
             cache::main_cache_set(cache_key, serde_json::to_vec(&merged).unwrap_or_default());
         }
         merged

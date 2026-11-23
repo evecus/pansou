@@ -167,10 +167,13 @@ impl AsyncEngine {
                     source: self.plugin.name().to_string(), message: "任务取消".into() }
             }
             Err(_) => {
-                // 超时：返回部分缓存或空，后台继续
+                // 超时：返回部分缓存，后台继续。
+                // 关键：不得用空结果覆盖已有缓存（否则并发挤兑时缓存被锁死为空，直到 TTL 过期）。
                 let elapsed = deadline.elapsed();
                 let partial = API_CACHE.get(&ck).map(|c| c.results).unwrap_or_default();
-                self.store_cache(&ck, vec![], false);
+                if !partial.is_empty() {
+                    self.store_cache(&ck, partial.clone(), false);
+                }
                 PluginSearchResult {
                     results: partial, is_final: false, timestamp: Utc::now(),
                     source: self.plugin.name().to_string(),
