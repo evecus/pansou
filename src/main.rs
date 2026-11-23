@@ -5,6 +5,7 @@ mod service;
 mod plugin;
 mod plugins;
 mod api;
+mod speedtest;
 
 use std::sync::Arc;
 
@@ -28,7 +29,7 @@ async fn main() {
     // 构建服务与路由
     let search = Arc::new(service::SearchService::new(manager.clone()));
     let check = Arc::new(service::CheckService::new());
-    let state = api::AppState { search, check };
+    let state = api::AppState { search, check, plugins: manager.plugins() };
     let app = api::build_router(state);
 
     let addr = format!("0.0.0.0:{}", cfg.port);

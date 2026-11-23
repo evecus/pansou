@@ -14,6 +14,7 @@ use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(RustEmbed)]
@@ -25,6 +26,7 @@ struct Frontend;
 pub struct AppState {
     pub search: Arc<SearchService>,
     pub check: Arc<CheckService>,
+    pub plugins: Vec<Arc<dyn crate::plugin::SearchPlugin>>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -37,6 +39,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/search", get(search_get).post(search_post))
         .route("/api/check/links", post(check_links))
         .route("/api/health", get(health))
+        .route("/api/speedtest/channels", post(speedtest_channels))
+        .route("/api/speedtest/plugins", post(speedtest_plugins))
         .route("/api/auth/login", post(auth_login))
         .route("/api/auth/verify", post(auth_verify))
         .route("/api/auth/logout", post(auth_logout));
@@ -175,6 +179,45 @@ async fn health(State(st): State<AppState>) -> AxumResponse {
         resp["plugins"] = json!(names);
     }
     Json(resp).into_response()
+}
+
+// ============ 延迟测试 ============
+/// POST /api/speedtest/channels  可选 body: {"channels": ["..."]}，省略则测全部
+async fn speedtest_channels(
+    State(_st): State<AppState>,
+    body: Option<Json<Value>>,
+) -> AxumResponse {
+    let cfg = config::get();
+    let channels: Vec<String> = body
+        .and_then(|Json(v)| v.get("channels").and_then(|c| c.as_array()).map(|arr| {
+            arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()
+        }))
+        .filter(|v: &Vec<String>| !v.is_empty())
+        .unwrap_or_else(|| cfg.default_channels.clone());
+    let timeout = Duration::from_secs(crate::speedtest::TIMEOUT_SECS);
+    let results = crate::speedtest::test_channels(&channels, timeout).await;
+    Json(Response::success(json!({ "results": results }))).into_response()
+}
+
+/// POST /api/speedtest/plugins  可选 body: {"plugins": ["..."]}，省略则测全部
+async fn speedtest_plugins(
+    State(st): State<AppState>,
+    body: Option<Json<Value>>,
+) -> AxumResponse {
+    let cfg = config::get();
+    let selected: Option<Vec<String>> = body.and_then(|Json(v)| {
+        v.get("plugins").and_then(|p| p.as_array()).map(|arr| {
+            arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect()
+        })
+    });
+    let plugins: Vec<Arc<dyn crate::plugin::SearchPlugin>> = match selected {
+        Some(names) if !names.is_empty() => st.plugins.iter()
+            .filter(|p| names.iter().any(|n| n == p.name())).cloned().collect(),
+        _ => st.plugins.clone(),
+    };
+    let timeout = Duration::from_secs(crate::speedtest::TIMEOUT_SECS);
+    let results = crate::speedtest::test_plugins(&plugins, timeout).await;
+    Json(Response::success(json!({ "results": results }))).into_response()
 }
 
 // ============ 认证接口 ============
