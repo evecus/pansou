@@ -10,15 +10,35 @@ use futures::future::join_all;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// TG 频道搜索整体硬超时（秒）：短于前端超时，保证混合搜索能及时返回
-const TG_SEARCH_TIMEOUT_SECS: u64 = 8;
-/// 单个 TG 频道客户端超时（秒）：测速接口实测可达即可用，避免慢频道拖垮整批
-const TG_CHANNEL_TIMEOUT_SECS: u64 = 8;
+/// 单个 TG 频道请求超时（秒），对齐 Go 的 TG_CHANNEL_REQUEST_TIMEOUT_SECONDS，默认 4。
+fn tg_request_timeout() -> Duration {
+    let v = std::env::var("TG_CHANNEL_REQUEST_TIMEOUT_SECONDS").ok()
+        .and_then(|v| v.parse::<u64>().ok()).filter(|v| *v > 0).unwrap_or(4);
+    Duration::from_secs(v)
+}
+
+/// TG 批任务软截止（秒），对齐 Go 的 TG_CHANNEL_TIMEOUT_SECONDS：0/未设置 = 跟随单频道请求超时。
+/// 到点就带着"已完成的频道"返回，未完成的频道不再拖住整个响应。
+fn tg_batch_timeout() -> Duration {
+    let v = std::env::var("TG_CHANNEL_TIMEOUT_SECONDS").ok()
+        .and_then(|v| v.parse::<u64>().ok()).filter(|v| *v > 0);
+    match v { Some(s) => Duration::from_secs(s), None => tg_request_timeout() }
+}
+
+/// TG 部分结果缓存：存"有频道超时/未完成"的结果，短 TTL。
+/// 前端首搜后会在 2~3 秒间隔内连续补搜 3 次；没有这层缓存，每次补搜都会重新打 100+ 个频道。
+static TG_PARTIAL_CACHE: once_cell::sync::Lazy<moka::sync::Cache<String, Vec<u8>>> =
+    once_cell::sync::Lazy::new(|| {
+        moka::sync::Cache::builder()
+            .time_to_live(Duration::from_secs(120))
+            .max_capacity(2_000)
+            .build()
+    });
 
 pub struct SearchService {
     pub plugin_manager: Arc<PluginManager>,
     client: HttpClient,
-    /// 专用于 TG 频道抓取：带代理（对齐 Go 原版 util.GetHTTPClient）、0 重试 + 8s 超时
+    /// 专用于 TG 频道抓取：带代理（对齐 Go 原版 util.GetHTTPClient）、0 重试，超时由每个频道任务自行控制
     /// 旧版用 build_client(None) 无代理，在需要代理的环境 t.me 必然全部超时。
     tg_client: HttpClient,
 }
@@ -40,21 +60,13 @@ impl SearchService {
 
         let channels = if req.channels.is_empty() { config::get().default_channels.clone() } else { req.channels.clone() };
 
-        // TG 与插件并发搜索
-        // t.me 在国内常不可达，单次抓取 30s×重试会拖垮整个响应；
-        // 给 TG 部分套硬超时，超时即放弃 TG 结果，保证插件/频道结果能及时返回。
+        // TG 与插件并发搜索。
+        // TG 阶段自带软截止（默认 4s，对齐 Go）：到点带着已完成频道的结果返回，
+        // 因此不再需要外层硬超时——旧版外层 8s 硬超时会在慢频道拖到 8s 时把 *所有* TG 结果丢掉，
+        // 且整个响应被拖到 8s，超过前端 5s 的等待窗口，前端就直接显示"未找到相关资源"。
         let tg_fut = async {
             if source_type == "all" || source_type == "tg" {
-                match tokio::time::timeout(
-                    Duration::from_secs(TG_SEARCH_TIMEOUT_SECS),
-                    self.search_tg(&req.kw, &channels, req.refresh),
-                ).await {
-                    Ok(r) => r,
-                    Err(_) => {
-                        tracing::warn!("TG 频道搜索超时({}s)，跳过 TG 结果", TG_SEARCH_TIMEOUT_SECS);
-                        vec![]
-                    }
-                }
+                self.search_tg(&req.kw, &channels, req.refresh).await
             } else { vec![] }
         };
         let plugin_fut = async {
@@ -104,45 +116,99 @@ impl SearchService {
     }
 
     async fn search_tg(&self, keyword: &str, channels: &[String], force: bool) -> Vec<SearchResult> {
+        if channels.is_empty() { return vec![]; }
         let cache_key = format!("tg:{}:{}", keyword, channels.join(","));
-        if !force && config::get().cache_enabled {
+        let cache_on = config::get().cache_enabled;
+        if !force && cache_on {
             if let Some(raw) = cache::main_cache_get(&cache_key) {
+                if let Ok(r) = serde_json::from_slice::<Vec<SearchResult>>(&raw) { return r; }
+            }
+            if let Some(raw) = TG_PARTIAL_CACHE.get(&cache_key) {
                 if let Ok(r) = serde_json::from_slice::<Vec<SearchResult>>(&raw) { return r; }
             }
         }
 
-        // TG 可达性门（对齐 Go 原版）：t.me 被墙时不是连接拒绝而是静默丢包，
-        // 108 个频道会全部挂满超时、换来 0 条结果，还拖垮 all 模式。
-        // 后台探测判定不可达时直接跳过 TG：不写缓存、不计频道失败，让插件结果正常返回。
+        // TG 可达性门（对齐 Go 原版）：t.me 被墙时直接跳过，不写缓存、不计频道失败。
         if !tg_reachability::reachable() {
             tracing::warn!("[searchTG] {}：t.me 当前不可达，跳过 TG 阶段（{:?}）",
                 keyword, tg_reachability::snapshot().get("reason"));
             return vec![];
         }
 
-        let client = &self.tg_client;
-        let futs: Vec<_> = channels.iter().map(|ch| {
-            let url = tg::build_search_url(ch, keyword, "");
+        let total = channels.len();
+        let req_timeout = tg_request_timeout();
+        let batch_timeout = tg_batch_timeout();
+
+        // 每个频道一个独立任务，结果经 mpsc 回收；任务自带单频道超时。
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<Vec<SearchResult>>>();
+        for ch in channels {
+            let tx = tx.clone();
+            let client = self.tg_client.clone();
             let ch = ch.clone();
-            async move {
-                // 每个频道独立超时：慢频道只影响自己，不拖垮整批 join_all
-                match tokio::time::timeout(
-                    Duration::from_secs(TG_CHANNEL_TIMEOUT_SECS),
-                    client.get_text(&url, None),
-                ).await {
-                    Ok(Ok(html)) => tg::parse_search_results(&html, &ch),
-                    Ok(Err(e)) => { tracing::debug!("TG {} 抓取失败: {}", ch, e); vec![] }
-                    Err(_) => { tracing::warn!("TG {} 抓取超时({}s)，跳过", ch, TG_CHANNEL_TIMEOUT_SECS); vec![] }
-                }
-            }
-        }).collect();
-        let results: Vec<Vec<SearchResult>> = join_all(futs).await;
-        let merged: Vec<SearchResult> = results.into_iter().flatten().collect();
-        // 空结果不写缓存，避免慢频道/失败时把空结果缓存下来污染后续请求
-        if config::get().cache_enabled && !merged.is_empty() {
-            cache::main_cache_set(cache_key, serde_json::to_vec(&merged).unwrap_or_default());
+            let url = tg::build_search_url(&ch, keyword, "");
+            tokio::spawn(async move {
+                let r = match tokio::time::timeout(req_timeout, client.get_text(&url, None)).await {
+                    Ok(Ok(html)) => Some(tg::parse_search_results(&html, &ch)),
+                    Ok(Err(e)) => { tracing::debug!("TG {} 抓取失败: {}", ch, e); None }
+                    Err(_) => { tracing::debug!("TG {} 抓取超时({:?})", ch, req_timeout); None }
+                };
+                let _ = tx.send(r);
+            });
         }
-        merged
+        drop(tx);
+
+        // 收集到软截止为止：到点就返回已完成的部分，不等慢频道。
+        let mut collected: Vec<SearchResult> = Vec::new();
+        let mut done = 0usize;
+        let mut succeeded = 0usize;
+        let deadline = tokio::time::sleep(batch_timeout);
+        tokio::pin!(deadline);
+        let mut finished_all = true;
+        loop {
+            tokio::select! {
+                msg = rx.recv() => match msg {
+                    Some(r) => {
+                        done += 1;
+                        if let Some(v) = r { succeeded += 1; collected.extend(v); }
+                    }
+                    None => break,
+                },
+                _ = &mut deadline => { finished_all = false; break; }
+            }
+        }
+
+        tracing::info!("[searchTG] {}：成功 {}/{}，已返回 {}，未完成 {}，共 {} 条",
+            keyword, succeeded, total, done, total - done, collected.len());
+
+        if finished_all {
+            // 全部频道已回：全失败不写缓存（避免网络抖动的空结果污染缓存）。
+            if cache_on && succeeded > 0 && !collected.is_empty() {
+                cache::main_cache_set(cache_key, serde_json::to_vec(&collected).unwrap_or_default());
+            }
+            return collected;
+        }
+
+        // 软截止触发：先把已有结果写入短 TTL 缓存，让紧随其后的前端补搜直接命中；
+        // 同时后台继续收尾，全部回来后用完整结果覆盖主缓存（对齐 Go 的 backfill）。
+        if cache_on && !collected.is_empty() {
+            TG_PARTIAL_CACHE.insert(cache_key.clone(), serde_json::to_vec(&collected).unwrap_or_default());
+        }
+        if cache_on {
+            let snapshot = collected.clone();
+            tokio::spawn(async move {
+                let mut all = snapshot;
+                let mut ok_any = succeeded > 0;
+                while let Some(r) = rx.recv().await {
+                    if let Some(v) = r { ok_any = true; all.extend(v); }
+                }
+                if ok_any && !all.is_empty() {
+                    let mut seen = std::collections::HashSet::new();
+                    all.retain(|r| seen.insert(r.unique_id.clone()));
+                    cache::main_cache_set(cache_key, serde_json::to_vec(&all).unwrap_or_default());
+                }
+            });
+        }
+        collected
     }
 
     async fn search_plugins(&self, req: &SearchRequest, source_type: &str) -> Vec<SearchResult> {
