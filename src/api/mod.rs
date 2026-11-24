@@ -18,7 +18,7 @@ use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(RustEmbed)]
-#[folder = "frontend_dist/"]
+#[folder = "frontend/"]
 struct Frontend;
 
 /// 应用共享状态
