@@ -6,7 +6,6 @@ edition = "2021"
 [profile.release]
 strip = true
 debug = false
-panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = 2

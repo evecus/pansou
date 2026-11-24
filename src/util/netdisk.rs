@@ -8,7 +8,7 @@ pub fn get_link_type(url: &str) -> &'static str {
     let mut u = url.to_lowercase();
     if u.contains("链接：") || u.contains("链接:") {
         if let Some(pos) = u.find("链接") {
-            u = u[pos + 2..].to_string();
+            u = u[pos + "链接".len()..].to_string();
             u = u.trim_start_matches(|c| c == '：' || c == ':').trim().to_string();
         }
     }

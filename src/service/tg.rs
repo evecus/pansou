@@ -171,3 +171,15 @@ fn cut_title(title: &str) -> String {
     }
     title[..end].trim().to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parse_realistic() {
+        let html = r#"<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="chan/123"><div class="tgme_widget_message_text">名称：爱情公寓 简介：xx<br>链接：<a href="https://pan.quark.cn/s/abc">https://pan.quark.cn/s/abc</a><br>提取码：abcd 📁 大小：1G</div><a class="tgme_widget_message_date"><time datetime="2026-11-24T00:00:00+00:00">x</time></a></div></div>
+        <div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="chan/124"><div class="tgme_widget_message_text"><a href="链接：https://pan.quark.cn/s/abc">爱情公寓</a> 🔥描述：好看</div><a class="tgme_widget_message_date"><time datetime="2026-11-24T00:00:00+00:00">x</time></a></div></div>"#;
+        let r = parse_search_results(html, "chan");
+        assert!(!r.is_empty());
+    }
+}
