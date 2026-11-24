@@ -41,6 +41,12 @@ pub struct Config {
     pub cache_path: PathBuf,
     pub cache_max_size_mb: usize,
     pub cache_ttl_minutes: u64,
+    /// 磁盘缓存目录（CACHE_DISK_PATH）。设置后缓存只存磁盘、不存内存。
+    pub cache_disk_path: Option<PathBuf>,
+    /// 是否存内存缓存（CACHE_MEMORY_ENABLED，默认 true）。配置了磁盘路径时此项无效（强制不存内存）。
+    pub cache_memory_enabled: bool,
+    /// 磁盘缓存定期清理间隔（CACHE_CLEAN_INTERVAL_MINUTES，默认 10）。
+    pub cache_clean_interval: Duration,
 
     pub enable_compression: bool,
     pub min_size_to_compress: usize,
@@ -77,6 +83,32 @@ fn env_bool_loose(key: &str, default: bool) -> bool {
 }
 fn env_i64(key: &str, default: i64) -> i64 {
     env::var(key).ok().and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(default)
+}
+
+/// 解析时长：支持 s/m/h/d 后缀（如 "30m"、"6h"、"2d"）；纯数字按 default_unit_secs 计（本项目里为分钟=60）。
+/// 无效、0 或负数返回 None。
+fn parse_duration(v: &str, default_unit_secs: u64) -> Option<Duration> {
+    let v = v.trim().to_lowercase();
+    if v.is_empty() { return None; }
+    let (num, unit) = match v.chars().last()? {
+        's' => (&v[..v.len() - 1], 1),
+        'm' => (&v[..v.len() - 1], 60),
+        'h' => (&v[..v.len() - 1], 3600),
+        'd' => (&v[..v.len() - 1], 86400),
+        _ => (&v[..], default_unit_secs),
+    };
+    let n: u64 = num.trim().parse().ok().filter(|n| *n > 0)?;
+    Some(Duration::from_secs(n.checked_mul(unit)?))
+}
+
+/// 读取时长型环境变量（纯数字按分钟）；依次尝试 keys，都没有或无效则用 default。
+fn env_duration_minutes(keys: &[&str], default: Duration) -> Duration {
+    for k in keys {
+        if let Ok(v) = env::var(k) {
+            if let Some(d) = parse_duration(&v, 60) { return d; }
+        }
+    }
+    default
 }
 
 impl Config {
@@ -173,7 +205,11 @@ impl Config {
             cache_enabled: env_bool_loose("CACHE_ENABLED", true),
             cache_path,
             cache_max_size_mb: env_i64("CACHE_MAX_SIZE", 100) as usize,
-            cache_ttl_minutes: env_i64("CACHE_TTL", 60) as u64,
+            cache_ttl_minutes: (env_duration_minutes(&["CACHE_TTL"], Duration::from_secs(3600)).as_secs() + 59) / 60,
+            cache_disk_path: env::var("CACHE_DISK_PATH").ok().map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()).map(PathBuf::from),
+            cache_memory_enabled: env_bool_loose("CACHE_MEMORY_ENABLED", true),
+            cache_clean_interval: env_duration_minutes(&["CACHE_CLEAN_INTERVAL", "CACHE_CLEAN_INTERVAL_MINUTES"], Duration::from_secs(600)),
             enable_compression: matches!(env::var("ENABLE_COMPRESSION").as_deref(), Ok("true") | Ok("1")),
             min_size_to_compress: env_i64("MIN_SIZE_TO_COMPRESS", 1024) as usize,
             plugin_timeout: Duration::from_secs(plugin_timeout_secs as u64),
@@ -210,4 +246,20 @@ pub fn init() -> &'static Config {
 
 pub fn get() -> &'static Config {
     CONFIG.get_or_init(Config::load)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn durations() {
+        assert_eq!(parse_duration("10", 60), Some(Duration::from_secs(600)));
+        assert_eq!(parse_duration("30m", 60), Some(Duration::from_secs(1800)));
+        assert_eq!(parse_duration("6h", 60), Some(Duration::from_secs(21600)));
+        assert_eq!(parse_duration(" 2D ", 60), Some(Duration::from_secs(172800)));
+        assert_eq!(parse_duration("0", 60), None);
+        assert_eq!(parse_duration("h", 60), None);
+        assert_eq!(parse_duration("-5", 60), None);
+        assert_eq!(parse_duration("abc", 60), None);
+    }
 }

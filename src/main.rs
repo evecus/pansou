@@ -21,6 +21,7 @@ async fn main() {
 
     // 启动 TG 可达性后台探测（对齐 Go 原版）：被墙时自动跳过 TG 阶段，
     // 避免 108 个频道静默丢包挂满超时拖垮 all 模式搜索。
+    util::cache::start_cleaner();
     service::tg_reachability::start_probe();
 
     // 注册插件

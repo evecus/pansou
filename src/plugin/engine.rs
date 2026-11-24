@@ -34,13 +34,15 @@ struct CachedResponse {
     access_count: u32,
 }
 
-static API_CACHE: once_cell::sync::Lazy<moka::sync::Cache<String, CachedResponse>> =
-    once_cell::sync::Lazy::new(|| {
-        moka::sync::Cache::builder()
-            .time_to_live(Duration::from_secs(config::get().async_cache_ttl_hours * 3600))
-            .max_capacity(20_000)
-            .build()
-    });
+/// 插件响应缓存：按配置存内存或磁盘（见 util::cache::KvCache）
+struct ApiCache(cache::KvCache);
+impl ApiCache {
+    fn get(&self, k: &str) -> Option<CachedResponse> { self.0.get_json(k) }
+    fn insert(&self, k: String, v: CachedResponse) { self.0.set_json(&k, &v); }
+}
+static API_CACHE: once_cell::sync::Lazy<ApiCache> = once_cell::sync::Lazy::new(|| {
+    ApiCache(cache::KvCache::new("plugin", Duration::from_secs(config::get().async_cache_ttl_hours * 3600), 20_000))
+});
 
 /// 工作池：限流后台任务
 struct WorkerPool {

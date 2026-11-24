@@ -27,13 +27,8 @@ fn tg_batch_timeout() -> Duration {
 
 /// TG 部分结果缓存：存"有频道超时/未完成"的结果，短 TTL。
 /// 前端首搜后会在 2~3 秒间隔内连续补搜 3 次；没有这层缓存，每次补搜都会重新打 100+ 个频道。
-static TG_PARTIAL_CACHE: once_cell::sync::Lazy<moka::sync::Cache<String, Vec<u8>>> =
-    once_cell::sync::Lazy::new(|| {
-        moka::sync::Cache::builder()
-            .time_to_live(Duration::from_secs(120))
-            .max_capacity(2_000)
-            .build()
-    });
+static TG_PARTIAL_CACHE: once_cell::sync::Lazy<cache::KvCache> =
+    once_cell::sync::Lazy::new(|| cache::KvCache::new("tg_partial", Duration::from_secs(120), 2_000));
 
 pub struct SearchService {
     pub plugin_manager: Arc<PluginManager>,
@@ -191,7 +186,7 @@ impl SearchService {
         // 软截止触发：先把已有结果写入短 TTL 缓存，让紧随其后的前端补搜直接命中；
         // 同时后台继续收尾，全部回来后用完整结果覆盖主缓存（对齐 Go 的 backfill）。
         if cache_on && !collected.is_empty() {
-            TG_PARTIAL_CACHE.insert(cache_key.clone(), serde_json::to_vec(&collected).unwrap_or_default());
+            TG_PARTIAL_CACHE.set(&cache_key, serde_json::to_vec(&collected).unwrap_or_default());
         }
         if cache_on {
             let snapshot = collected.clone();
